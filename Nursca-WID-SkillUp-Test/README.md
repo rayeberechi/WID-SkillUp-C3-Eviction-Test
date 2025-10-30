@@ -1,1 +1,0 @@
-# This is a placeholder for the new directory structure. The actual files will be moved here.
