@@ -207,5 +207,4 @@ Troubleshooting
 
 License
 
-Check repository root files for license det
->>>>>>> 76d159f9e4d9797ce87518e6f1d0571be3415f9a
+Check repository root files for license detials
