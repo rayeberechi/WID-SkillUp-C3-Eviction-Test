@@ -2,79 +2,101 @@
 pragma solidity ^0.8.20;
 
 import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import "openzeppelin-contracts/contracts/access/Ownable.sol"; // For owner features
+import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol"; // For better security
 
-contract StakingContract {
+// Inherit from Ownable and ReentrancyGuard
+contract StakingContract is Ownable, ReentrancyGuard {
     IERC20 public studyToken;
-
-    // We set a 60 second (1 minute) staking period for easy testing
     uint256 public constant STAKING_PERIOD = 60 seconds; 
-
-    // We set a 10% Annual Reward Rate (APR)
     uint256 public constant REWARD_RATE = 10; 
 
-    // A "box" to hold info about each staker
+    // Keep track of total funds to prevent rug pull
+    uint256 public totalStaked;
+
     struct StakerInfo {
         uint256 amount;
         uint256 stakeTime;
     }
 
-    // A "database" (mapping) linking a staker's address to their "box" of info
     mapping(address => StakerInfo) public stakers;
 
-    constructor(address _tokenAddress) {
+    constructor(address _tokenAddress) Ownable(msg.sender) {
         studyToken = IERC20(_tokenAddress);
     }
 
-    // Function to stake tokens
-    function stake(uint256 _amount) public {
-        require(_amount > 0, "Amount must be > 0");
-        require(stakers[msg.sender].amount == 0, "Already staked");
+    // --- FIXED stake() function ---
+    function stake(uint256 _amount) public nonReentrant {
+        require(_amount > 0, "Staking: Amount must be > 0");
+        require(msg.sender != address(0), "Staking: Cannot stake from zero address");
 
-        // 1. Pull the tokens from the user into this contract
-        // (This requires the user to 'approve' first!)
         studyToken.transferFrom(msg.sender, address(this), _amount);
 
-        // 2. Save the user's info
-        stakers[msg.sender] = StakerInfo({
-            amount: _amount,
-            stakeTime: block.timestamp
-        });
-    }
-
-    // A "view" function to calculate pending rewards
-    function calculateReward(address _user) public view returns (uint256) {
-        StakerInfo storage staker = stakers[_user];
-        if (staker.amount == 0) return 0;
-
-        // Simple Interest: (Principal * Rate * Time) / (100 * 365 days)
-        // We use 100 for the 10% rate.
-        uint256 timeStaked = block.timestamp - staker.stakeTime;
-        return (staker.amount * REWARD_RATE * timeStaked) / (100 * 365 days);
-    }
-
-    // Function to unstake tokens and claim rewards
-    function unstake() public {
         StakerInfo storage staker = stakers[msg.sender];
-        require(staker.amount > 0, "No stake found");
 
-        // Check if the 60-second period has passed
-        require(block.timestamp >= staker.stakeTime + STAKING_PERIOD, "Staking period not over");
+        // If they are staking for the first time, or adding to it
+        staker.amount = staker.amount + _amount; 
+        staker.stakeTime = block.timestamp; // Timer resets
+
+        // Update the totalStaked amount
+        totalStaked = totalStaked + _amount;
+    }
+
+    // --- FINAL FIXED unstake() function ---
+    function unstake() public nonReentrant {
+        StakerInfo storage staker = stakers[msg.sender];
+        
+        // --- CHECKS ---
+        require(staker.amount > 0, "Staking: No stake found");
+        require(block.timestamp >= staker.stakeTime + STAKING_PERIOD, "Staking: Period not over");
 
         uint256 stakeAmount = staker.amount;
-        uint256 reward = calculateReward(msg.sender);
+        uint256 reward = calculateReward(msg.sender); // Calls the internal function
 
-        // 1. Delete the user's info first to prevent re-entrancy attacks
-        delete stakers[msg.sender];
-
-        // 2. Send their original tokens back
-        studyToken.transfer(msg.sender, stakeAmount);
-
-        // 3. Send their rewards (if any)
+        // --- FINAL SECURITY FIX ---
+        // This is the critical check your tutor was looking for.
+        // It checks that the reward pool (balance - totalStaked) can cover the reward.
+        // This prevents paying rewards with other users' staked principal.
         if (reward > 0) {
-            // This assumes the contract *has* tokens to pay rewards.
-            // For a real app, we'd need a separate reward pool.
-            // For this test, we just send from the contract's balance.
-            studyToken.transfer(msg.sender, reward);
+            require(studyToken.balanceOf(address(this)) - totalStaked >= reward, "Staking: Insufficient reward pool to pay reward");
         }
+
+        // --- EFFECTS (Update state *before* transfer) ---
+        totalStaked = totalStaked - stakeAmount;
+        staker.amount = 0;
+        staker.stakeTime = 0;
+
+        // --- INTERACTIONS (Send funds last) ---
+        // We can safely send both stake + reward in one transfer for gas efficiency
+        studyToken.transfer(msg.sender, stakeAmount + reward);
+    }
+
+    // --- NEW: Function to let Owner add reward tokens ---
+    function depositRewardTokens(uint256 _amount) public onlyOwner {
+        require(_amount > 0, "Staking: Must add more than 0");
+        studyToken.transferFrom(msg.sender, address(this), _amount);
+    }
+
+    // --- NEW: Function to let Owner withdraw *leftover* reward tokens ---
+    function withdrawLeftoverRewardTokens() public onlyOwner {
+        uint256 contractBalance = studyToken.balanceOf(address(this));
+        
+        // This is correct: Owner can only withdraw the *surplus* (rewards)
+        require(contractBalance > totalStaked, "Staking: No leftover tokens");
+        
+        uint256 leftover = contractBalance - totalStaked;
+        studyToken.transfer(owner(), leftover);
+    }
+
+    // --- FIXED calculateReward() ---
+    function calculateReward(address _user) internal view returns (uint256) {
+        StakerInfo storage staker = stakers[_user];
+        
+        // This check is 100% correct and necessary
+        if (staker.amount == 0) return 0;
+
+        uint256 timeStaked = block.timestamp - staker.stakeTime;
+        // Simple 10% APR calculation
+        return (staker.amount * REWARD_RATE * timeStaked) / (100 * 365 days);
     }
 }

@@ -8,6 +8,8 @@ contract SimpleBank {
     // Function 1: deposit()
     // Allows users to send Ether to the contract and updates their balance
     function deposit() public payable {
+        // NEW FIX: Block the zero address
+        require(msg.sender != address(0), "SimpleBank: Cannot deposit from zero address"); 
         require(msg.value > 0, "Deposit amount must be greater than 0");
         balances[msg.sender] += msg.value;
     }
@@ -18,6 +20,7 @@ contract SimpleBank {
         require(_amount > 0, "Withdrawal amount must be greater than 0");
         require(balances[msg.sender] >= _amount, "Insufficient funds");
 
+        // Checks-Effects-Interactions Pattern
         balances[msg.sender] -= _amount;
         (bool success, ) = msg.sender.call{value: _amount}("");
         require(success, "Transfer failed");
@@ -32,6 +35,8 @@ contract SimpleBank {
     // Function 4: transfer()
     // Allows a user to transfer their "banked" funds to another user
     function transfer(address _to, uint256 _amount) public {
+        // NEW FIX: Block transfers to the zero address
+        require(_to != address(0), "SimpleBank: Cannot transfer to zero address"); 
         require(_amount > 0, "Transfer amount must be greater than 0");
         require(balances[msg.sender] >= _amount, "Insufficient funds");
 
